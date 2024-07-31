@@ -5,6 +5,7 @@ import time
 import requests
 from dotenv import load_dotenv
 from telebot import TeleBot
+from http import HTTPStatus
 
 import exceptions
 
@@ -45,18 +46,15 @@ def check_tokens():
         ('TELEGRAM_TOKEN', TELEGRAM_TOKEN),
         ('TELEGRAM_CHAT_ID', TELEGRAM_CHAT_ID)
     )
-    all_tokens_verified = True
     missing_token = []
     for name_token, value_token in tokens:
-        if not value_token:
-            all_tokens_verified = False
+        if value_token is None:
             missing_token.append(name_token)
-    if not all_tokens_verified:
-        logger.critical(
-            f'Отсутствует обязательная переменная '
-            f'окружения: {", ".join(missing_token)}'
-        )
-        raise KeyError('Not all tokens have been verified')
+    if missing_token:
+        code_error = ', '.join(missing_token)
+        raise KeyError(f'Не установлены следующие токены:'
+                       f'{code_error}')
+    return True
 
 
 def send_message(bot, message):
@@ -75,30 +73,25 @@ def get_api_answer(timestamp):
     payload = {'from_date': timestamp}
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=payload)
-        if response.status_code != 200:
-            code_error = (
-                f'Эндпоинт {ENDPOINT} недоступен.'
-                f' Код ответа API: {response.status_code}')
-            logger.error(code_error)
-            raise exceptions.NoAnswer200Error(code_error)
-        return response.json()
     except requests.RequestException as error:
-        code_error = f'Ошибка запроса: {error}'
-        logger.error(code_error)
-        raise exceptions.RequestError(f'Ошибка запроса: {code_error}')
+        raise exceptions.RequestError(f'Ошибка запроса: {error}')
+    if response.status_code != HTTPStatus.OK:
+        code_error = (
+            f'Эндпоинт {ENDPOINT} недоступен.'
+            f' Код ответа API: {response.status_code}')
+        raise exceptions.NoAnswer200Error(code_error)
+    return response.json()
 
 
 def check_response(response):
     """Проверяем данные в response."""
-    logging.debug('Начало проверки')
     if not isinstance(response, dict):
         raise TypeError('Ошибка в типе ответа API')
-    if 'homeworks' not in response or 'current_date' not in response:
+    if 'homeworks' not in response:
         raise exceptions.EmptyDictOrListError('Пустой ответ от API')
-    homeworks = response.get('homeworks')
-    if not isinstance(homeworks, list):
+    if not isinstance(response['homeworks'], list):
         raise TypeError('Homeworks не является списком')
-    return homeworks
+    return True
 
 
 def parse_status(homework):
@@ -125,11 +118,15 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
-
     bot = TeleBot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time())
+    timestamp = 0
     message = None
+    try:
+        check_tokens()
+    except Exception as error:
+        logger.critical(error)
+        raise SystemExit
+
     send_message(
         bot,
         'Привет, давай проверим твои ДЗ'
@@ -139,17 +136,11 @@ def main():
         try:
             response = get_api_answer(timestamp)
             if check_response(response):
-                if response['homeworks']:
-                    homework = response['homeworks'][0]
-                message_new = parse_status(homework)
+                message_new = parse_status(response['homeworks'][0])
                 if message != message_new:
                     message = message_new
                     send_message(bot, message)
-                else:
-                    message_new = 'Нет актуальных данных для проверки'
-                    if message != message_new:
-                        message = message_new
-                        send_message(bot, message)
+                    continue
 
         except Exception as error:
             code_error = f'Сбой в работе: {error}'
