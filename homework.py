@@ -96,24 +96,20 @@ def check_response(response):
 
 def parse_status(homework):
     """Анализируем изменение статуса."""
-    try:
-        status = homework['status']
-    except KeyError as error:
-        raise KeyError(f'Неизвестный статус: {error}')
+    homework_name = homework.get('homework_name')
+    homework_status = homework.get('status')
+    if homework_status is None:
+        raise KeyError('Неизвестный статус')
+    if homework_name is None:
+        raise KeyError('В ответе нет ключа homework_name')
 
-    try:
-        homework_name = homework['homework_name']
-    except KeyError as error:
-        raise KeyError(f'В ответе нет ключа homework_name: {error}')
-
-    try:
-        verdict_status = HOMEWORK_VERDICTS[status]
-    except KeyError as error:
-        raise KeyError(f'Статус не найден: {error}')
-
-    return (
-        f'Изменился статус проверки работы "{homework_name}". {verdict_status}'
-    )
+    if homework_status in HOMEWORK_VERDICTS:
+        verdict_status = HOMEWORK_VERDICTS[homework_status]
+        return (
+            f'Изменился статус проверки работы '
+            f'"{homework_name}". {verdict_status}'
+        )
+    raise KeyError('Статус не найден')
 
 
 def main():
@@ -135,12 +131,10 @@ def main():
     while True:
         try:
             response = get_api_answer(timestamp)
-            if check_response(response):
-                message_new = parse_status(response['homeworks'][0])
-                if message != message_new:
-                    message = message_new
-                    send_message(bot, message)
-                    continue
+            if message != check_response(response):
+                send_message(bot, parse_status(response['homeworks'][0]))
+                message = check_response(response)
+                continue
 
         except Exception as error:
             code_error = f'Сбой в работе: {error}'
